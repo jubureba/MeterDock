@@ -1,0 +1,11 @@
+## Interface: 120007
+## Title: |cff00ccffMeterDock|r
+## Notes: Snap, dock & enhance Blizzard's damage meter. Dock windows side-by-side, sync resize, peek-expand, and more.
+## Author: jubureba
+## Version: 1.1.0
+## SavedVariables: MeterDockDB
+## Dependencies: Blizzard_DamageMeter
+## X-Category: Combat
+## X-Website: https://www.curseforge.com/wow/addons/meterdock
+
+Core.lua
