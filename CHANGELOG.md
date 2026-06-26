@@ -1,5 +1,29 @@
 # Changelog
 
+## [1.2.0] - 2026-06-26
+
+### Added
+- Theme system: blizzard (default), dark, minimal, neon, custom
+- Bar texture override: flat, smooth, blizzard raid, or custom path
+- Background alpha control
+- Dock gap setting (space between docked windows)
+- Hide docked headers option
+- Show/hide peek hint toggle
+- All visual elements now use dynamic theme colors
+- Theme/bar/alpha/gap slash commands
+- Theme selector in right-click menu
+
+### Changed
+- All colors are now Blizzard gold/amber scheme by default (matches native meter)
+- Removed ugly background bar from peek hint — now shows only text + icons cleanly
+- Smaller, cleaner arrow icons (12x12)
+- Animations use theme colors dynamically
+
+### Fixed
+- Changing theme now immediately updates all visual elements
+- Peek expand works on anchor window (uses FULLSCREEN_DIALOG strata)
+- Taint error when trying to move locked windows (uses snap-back instead of SetMovable)
+
 ## [1.1.0] - 2026-06-24
 
 ### Added

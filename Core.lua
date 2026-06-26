@@ -17,18 +17,88 @@ local addonName, ns = ...
 
 local DMP = CreateFrame("Frame", "MeterDockFrame", UIParent)
 ns.DMP = DMP
-DMP.version = "1.1.0"
+DMP.version = "1.2.0"
 
 local DEFAULTS = {
     enabled = true,
     snapDistance = 18,
     -- sizeMode: "inherit" | "keep" | "auto" | "manual"
-    --   inherit = match anchor size (default)
-    --   keep    = keep the size the window had before docking
-    --   auto    = auto-fit based on dock side (height for L/R, width for T/B)
-    --   manual  = don't change size at all, user sets it
     sizeMode = "inherit",
     docked = {},  -- [windowIdx] = { side, anchorTo }
+
+    -- Visual Customization
+    theme = "blizzard",  -- "blizzard" | "dark" | "minimal" | "neon" | "custom"
+
+    -- Custom theme colors (used when theme == "custom")
+    colors = {
+        accent     = { 0.78, 0.65, 0.36 },  -- glow/highlight color
+        accentBright = { 0.9, 0.75, 0.3 },   -- brighter variant
+        accentDim  = { 0.6, 0.5, 0.2 },      -- dimmer variant
+        text       = { 0.85, 0.72, 0.4 },    -- peek text / arrows
+        undockIcon = { 0.78, 0.65, 0.36 },    -- undock button icon
+        undockHover = { 0.9, 0.25, 0.2 },     -- undock hover bg
+        flashDock  = { 0.9, 0.75, 0.3 },      -- dock animation color
+        flashUndock = { 1.0, 0.3, 0.15 },     -- undock animation color
+    },
+
+    -- Bar texture override (empty = use Blizzard default)
+    barTexture = "",
+
+    -- Background alpha override (0 = don't override, 0.01-1.0 = custom)
+    backgroundAlpha = 0,
+
+    -- Show/hide peek expand indicators
+    showPeekHint = true,
+
+    -- Dock gap (pixels between docked windows, 0 = flush)
+    dockGap = 0,
+
+    -- Hide Blizzard header on docked windows (cleaner look)
+    hideDockedHeaders = false,
+}
+
+-- Theme presets
+local THEMES = {
+    blizzard = {
+        accent       = { 0.78, 0.65, 0.36 },
+        accentBright = { 0.9, 0.75, 0.3 },
+        accentDim    = { 0.6, 0.5, 0.2 },
+        text         = { 0.85, 0.72, 0.4 },
+        undockIcon   = { 0.78, 0.65, 0.36 },
+        undockHover  = { 0.9, 0.25, 0.2 },
+        flashDock    = { 0.9, 0.75, 0.3 },
+        flashUndock  = { 1.0, 0.3, 0.15 },
+    },
+    dark = {
+        accent       = { 0.45, 0.45, 0.5 },
+        accentBright = { 0.6, 0.6, 0.65 },
+        accentDim    = { 0.3, 0.3, 0.35 },
+        text         = { 0.55, 0.55, 0.6 },
+        undockIcon   = { 0.5, 0.5, 0.55 },
+        undockHover  = { 0.7, 0.2, 0.2 },
+        flashDock    = { 0.5, 0.5, 0.55 },
+        flashUndock  = { 0.8, 0.25, 0.15 },
+    },
+    minimal = {
+        accent       = { 0.9, 0.9, 0.9 },
+        accentBright = { 1.0, 1.0, 1.0 },
+        accentDim    = { 0.6, 0.6, 0.6 },
+        text         = { 0.8, 0.8, 0.8 },
+        undockIcon   = { 0.7, 0.7, 0.7 },
+        undockHover  = { 0.8, 0.2, 0.2 },
+        flashDock    = { 0.9, 0.9, 0.9 },
+        flashUndock  = { 0.7, 0.2, 0.1 },
+    },
+    neon = {
+        accent       = { 0.0, 0.9, 0.7 },
+        accentBright = { 0.2, 1.0, 0.8 },
+        accentDim    = { 0.0, 0.5, 0.4 },
+        text         = { 0.1, 0.95, 0.75 },
+        undockIcon   = { 0.0, 0.8, 0.6 },
+        undockHover  = { 1.0, 0.1, 0.3 },
+        flashDock    = { 0.0, 1.0, 0.8 },
+        flashUndock  = { 1.0, 0.2, 0.4 },
+    },
 }
 
 -- Runtime
@@ -36,6 +106,112 @@ local anchorWindow = nil
 local secondaryWindows = {}
 local allWindows = {}
 local snapIndicator = nil
+
+--------------------------------------------------------------------
+-- Theme Color Resolver
+--------------------------------------------------------------------
+
+function DMP:GetColors()
+    local theme = self.db and self.db.theme or "blizzard"
+    if theme == "custom" then
+        return self.db.colors or THEMES.blizzard
+    end
+    return THEMES[theme] or THEMES.blizzard
+end
+
+function DMP:C(key)
+    local colors = self:GetColors()
+    return colors[key] or THEMES.blizzard[key]
+end
+
+--------------------------------------------------------------------
+-- Bar Texture Helper
+--------------------------------------------------------------------
+
+function DMP:GetBarTexture()
+    local tex = self.db and self.db.barTexture or ""
+    if tex == "" then return nil end  -- nil = don't override Blizzard default
+    return tex
+end
+
+--------------------------------------------------------------------
+-- Apply visual overrides to Blizzard meter windows
+--------------------------------------------------------------------
+
+function DMP:ApplyVisualOverrides()
+    local c = self:GetColors()
+
+    -- Update all peek handles with new theme colors
+    for _, win in ipairs(allWindows) do
+        local ph = win._dmpPeekHandle
+        if ph then
+            -- Arrows
+            if ph._arrowLeft then
+                ph._arrowLeft:SetVertexColor(c.text[1], c.text[2], c.text[3])
+            end
+            if ph._arrowRight then
+                ph._arrowRight:SetVertexColor(c.text[1], c.text[2], c.text[3])
+            end
+            -- Label
+            if ph._arrowLabel then
+                ph._arrowLabel:SetTextColor(c.text[1], c.text[2], c.text[3])
+            end
+        end
+
+        -- Undock button
+        local btn = win._dmpUndockBtn
+        if btn and btn._icon then
+            btn._icon:SetVertexColor(c.undockIcon[1], c.undockIcon[2], c.undockIcon[3])
+        end
+    end
+
+    -- Update snap indicator colors (will take effect next time it shows)
+    if snapIndicator and snapIndicator._tex then
+        snapIndicator._tex:SetColorTexture(c.accentBright[1], c.accentBright[2], c.accentBright[3], 0.5)
+    end
+    if snapIndicator and snapIndicator._outer then
+        snapIndicator._outer:SetColorTexture(c.accentDim[1], c.accentDim[2], c.accentDim[3], 0.15)
+    end
+
+    -- Background alpha
+    local bgAlpha = self.db.backgroundAlpha or 0
+    if bgAlpha > 0 then
+        for _, win in ipairs(allWindows) do
+            if win.SetBackdropColor then
+                win:SetBackdropColor(0, 0, 0, bgAlpha)
+            end
+        end
+    end
+
+    -- Bar texture
+    local barTex = self:GetBarTexture()
+    if barTex then
+        self:ApplyBarTexture(barTex)
+    end
+
+    -- Hide/show headers on docked windows
+    for idx, _ in pairs(self.db.docked) do
+        local win = allWindows[idx]
+        if win and win.Header then
+            win.Header:SetAlpha(self.db.hideDockedHeaders and 0 or 1)
+        end
+    end
+end
+
+function DMP:ApplyBarTexture(texturePath)
+    -- Hook the Blizzard bar style function to apply our texture
+    if not self._barTextureHooked and DamageMeterEntryMixin then
+        hooksecurefunc(DamageMeterEntryMixin, "UpdateStyle", function(entry)
+            if self.db.barTexture ~= "" then
+                local bar = entry.StatusBar or entry.Bar
+                if bar and bar.SetStatusBarTexture then
+                    bar:SetStatusBarTexture(self.db.barTexture)
+                end
+            end
+        end)
+        self._barTextureHooked = true
+    end
+end
 
 --------------------------------------------------------------------
 -- Init
@@ -67,11 +243,12 @@ function DMP:Init()
             self:HookPeekExpand()
             self:HookBlizzardMenu()
             self:RestoreLayout()
+            self:ApplyVisualOverrides()
         end
     end)
 
     self:RegisterSlashCommands()
-    self:Print("|cff00ccffMeterDock|r v" .. self.version .. " loaded. /md")
+    self:Print("|cffcc9900MeterDock|r v" .. self.version .. " loaded. /md")
 end
 
 --------------------------------------------------------------------
@@ -217,7 +394,6 @@ function DMP:PositionWindow(win, anchor, side)
     -- Blizzard's internal parent-child chain from causing circular refs.
 
     -- 1. Pin the anchor to UIParent (absolute position) if it's not the main anchor.
-    --    This breaks any Blizzard internal dependency chain.
     if anchor ~= anchorWindow then
         self:PinToUIParent(anchor)
     end
@@ -225,15 +401,16 @@ function DMP:PositionWindow(win, anchor, side)
     -- 2. Clear the window we're about to position
     win:ClearAllPoints()
 
-    -- 3. Set the new anchor point
+    -- 3. Set the new anchor point with optional gap
+    local gap = self.db.dockGap or 0
     if side == "RIGHT" then
-        win:SetPoint("TOPLEFT", anchor, "TOPRIGHT", 0, 0)
+        win:SetPoint("TOPLEFT", anchor, "TOPRIGHT", gap, 0)
     elseif side == "LEFT" then
-        win:SetPoint("TOPRIGHT", anchor, "TOPLEFT", 0, 0)
+        win:SetPoint("TOPRIGHT", anchor, "TOPLEFT", -gap, 0)
     elseif side == "TOP" then
-        win:SetPoint("BOTTOMLEFT", anchor, "TOPLEFT", 0, 0)
+        win:SetPoint("BOTTOMLEFT", anchor, "TOPLEFT", 0, gap)
     elseif side == "BOTTOM" then
-        win:SetPoint("TOPLEFT", anchor, "BOTTOMLEFT", 0, 0)
+        win:SetPoint("TOPLEFT", anchor, "BOTTOMLEFT", 0, -gap)
     end
 end
 
@@ -478,17 +655,19 @@ function DMP:ShowUndockButton(win)
         bg:SetVertexColor(0.15, 0.15, 0.2, 0.8)
         btn._bg = bg
 
-        -- Unlink icon (using common UI disconnect icon)
+        -- Unlink icon
         local icon = btn:CreateTexture(nil, "ARTWORK")
         icon:SetSize(10, 10)
         icon:SetPoint("CENTER")
         icon:SetTexture("Interface\\BUTTONS\\UI-GroupLoot-Pass-Up")
-        icon:SetVertexColor(0.6, 0.8, 1.0)
+        local ic = self:C("undockIcon")
+        icon:SetVertexColor(ic[1], ic[2], ic[3])
         icon:SetAlpha(0.7)
         btn._icon = icon
 
         btn:SetScript("OnEnter", function()
-            bg:SetVertexColor(0.9, 0.25, 0.2, 0.9)
+            local hc = self:C("undockHover")
+            bg:SetVertexColor(hc[1], hc[2], hc[3], 0.9)
             icon:SetVertexColor(1, 1, 1)
             icon:SetAlpha(1.0)
             GameTooltip:SetOwner(btn, "ANCHOR_TOPRIGHT")
@@ -498,7 +677,8 @@ function DMP:ShowUndockButton(win)
         end)
         btn:SetScript("OnLeave", function()
             bg:SetVertexColor(0.15, 0.15, 0.2, 0.8)
-            icon:SetVertexColor(0.6, 0.8, 1.0)
+            local lc = self:C("undockIcon")
+            icon:SetVertexColor(lc[1], lc[2], lc[3])
             icon:SetAlpha(0.7)
             GameTooltip:Hide()
         end)
@@ -566,14 +746,16 @@ end
 
 -- Dock animation: border glow sweep (left-to-right wipe effect)
 function DMP:AnimateDock(win)
-    -- Top glow line that sweeps across
+    local c = self:GetColors()
+
     if not win._dmpDockLine then
         win._dmpDockLine = win:CreateTexture(nil, "OVERLAY")
         win._dmpDockLine:SetHeight(2)
-        win._dmpDockLine:SetColorTexture(0, 0.85, 1.0, 0)
     end
 
     local line = win._dmpDockLine
+    local fc = c.flashDock
+    line:SetColorTexture(fc[1], fc[2], fc[3], 0)
     line:Show()
     line:ClearAllPoints()
     line:SetPoint("TOPLEFT", win, "TOPLEFT", 0, 0)
@@ -586,20 +768,16 @@ function DMP:AnimateDock(win)
     C_Timer.NewTicker(0.016, function(ticker)
         t = t + 0.016
         local progress = math.min(t / duration, 1.0)
-        -- Ease-out quad
         local ease = 1 - (1 - progress) * (1 - progress)
-        local w = totalWidth * ease
+        line:SetWidth(math.max(1, totalWidth * ease))
 
-        line:SetWidth(math.max(1, w))
-
-        -- Fade in then out
         local alpha
         if progress < 0.3 then
             alpha = (progress / 0.3) * 0.7
         else
             alpha = 0.7 * (1 - (progress - 0.3) / 0.7)
         end
-        line:SetColorTexture(0, 0.85, 1.0, math.max(0, alpha))
+        line:SetColorTexture(fc[1], fc[2], fc[3], math.max(0, alpha))
 
         if progress >= 1.0 then
             line:Hide()
@@ -607,18 +785,19 @@ function DMP:AnimateDock(win)
         end
     end)
 
-    -- Also do a subtle full-frame flash
+    -- Subtle full-frame flash
     if not win._dmpGlow then
         win._dmpGlow = win:CreateTexture(nil, "OVERLAY")
         win._dmpGlow:SetAllPoints()
-        win._dmpGlow:SetColorTexture(0, 0.8, 1.0, 0)
     end
+    local ac = c.accent
+    win._dmpGlow:SetColorTexture(ac[1], ac[2], ac[3], 0)
     win._dmpGlow:Show()
     local gt = 0
     C_Timer.NewTicker(0.016, function(ticker)
         gt = gt + 0.016
         local alpha = 0.15 * math.max(0, 1 - gt / 0.25)
-        win._dmpGlow:SetColorTexture(0, 0.8, 1.0, alpha)
+        win._dmpGlow:SetColorTexture(ac[1], ac[2], ac[3], alpha)
         if gt >= 0.25 then
             win._dmpGlow:Hide()
             ticker:Cancel()
@@ -626,15 +805,18 @@ function DMP:AnimateDock(win)
     end)
 end
 
--- Undock animation: border flash red → dissolve outward
+-- Undock animation: themed flash → dissolve
 function DMP:AnimateUndock(win)
+    local c = self:GetColors()
+
     if not win._dmpDockLine then
         win._dmpDockLine = win:CreateTexture(nil, "OVERLAY")
         win._dmpDockLine:SetHeight(2)
-        win._dmpDockLine:SetColorTexture(0, 0, 0, 0)
     end
 
     local line = win._dmpDockLine
+    local fc = c.flashUndock
+    line:SetColorTexture(fc[1], fc[2], fc[3], 0)
     line:Show()
     line:ClearAllPoints()
     line:SetPoint("TOPLEFT", win, "TOPLEFT", 0, 0)
@@ -645,14 +827,9 @@ function DMP:AnimateUndock(win)
     C_Timer.NewTicker(0.016, function(ticker)
         t = t + 0.016
         local progress = math.min(t / 0.3, 1.0)
-
-        -- Red flash that fades
         local alpha = 0.6 * (1 - progress * progress)
-        line:SetColorTexture(1.0, 0.3, 0.15, math.max(0, alpha))
-
-        -- Expand height slightly for dissolve effect
-        local h = 2 + 4 * progress
-        line:SetHeight(h)
+        line:SetColorTexture(fc[1], fc[2], fc[3], math.max(0, alpha))
+        line:SetHeight(2 + 4 * progress)
 
         if progress >= 1.0 then
             line:Hide()
@@ -678,13 +855,14 @@ function DMP:ShowSnapPreview(target, side)
         outer:SetPoint("BOTTOMRIGHT", 3, -3)
         snapIndicator._outer = outer
 
-        -- Smooth pulse
+        -- Smooth pulse using theme colors
         local pulse_t = 0
-        snapIndicator:SetScript("OnUpdate", function(self, elapsed)
+        snapIndicator:SetScript("OnUpdate", function(si, elapsed)
             pulse_t = pulse_t + elapsed
+            local c = DMP:GetColors()
             local alpha = 0.5 + 0.25 * math.sin(pulse_t * 5)
-            self._tex:SetColorTexture(0, 0.85, 1.0, alpha)
-            self._outer:SetColorTexture(0, 0.6, 0.9, alpha * 0.3)
+            si._tex:SetColorTexture(c.accentBright[1], c.accentBright[2], c.accentBright[3], alpha)
+            si._outer:SetColorTexture(c.accentDim[1], c.accentDim[2], c.accentDim[3], alpha * 0.3)
         end)
     end
 
@@ -880,7 +1058,7 @@ function DMP:RefreshOptions()
     local currentMode = self.db.sizeMode or "inherit"
     for _, entry in ipairs(f.sizeModeButtons) do
         if entry.key == currentMode then
-            entry.btn:SetText("|cff00ccff> " .. entry.btn:GetText():gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", "") .. "|r")
+            entry.btn:SetText("|cffcc9900> " .. entry.btn:GetText():gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", "") .. "|r")
             entry.btn:Disable()
         else
             -- Reset text (remove color codes)
@@ -941,7 +1119,7 @@ function DMP:ShowContextMenu(win)
     local dockInfo = self.db.docked[idx]
 
     MenuUtil.CreateContextMenu(win, function(_, rootDescription)
-        rootDescription:CreateTitle("|cff00ccffMeterDock|r")
+        rootDescription:CreateTitle("|cffcc9900MeterDock|r")
         rootDescription:CreateDivider()
 
         -- Toggle snap/dock
@@ -964,7 +1142,7 @@ function DMP:ShowContextMenu(win)
 
         -- Size mode options
         rootDescription:CreateDivider()
-        rootDescription:CreateTitle("Size Mode: |cff00ccff" .. (self.db.sizeMode or "inherit") .. "|r")
+        rootDescription:CreateTitle("Size Mode: |cffcc9900" .. (self.db.sizeMode or "inherit") .. "|r")
 
         local modes = {
             { key = "inherit", label = "Inherit (match anchor)" },
@@ -974,7 +1152,7 @@ function DMP:ShowContextMenu(win)
         }
         for _, m in ipairs(modes) do
             local current = (self.db.sizeMode or "inherit") == m.key
-            local prefix = current and "|cff00ff00● |r" or "    "
+            local prefix = current and "|cff66cc33● |r" or "    "
             rootDescription:CreateButton(prefix .. m.label, function()
                 self.db.sizeMode = m.key
                 if m.key == "inherit" or m.key == "auto" then
@@ -1011,6 +1189,38 @@ function DMP:ShowContextMenu(win)
             rootDescription:CreateTitle("|cff888888This is the anchor window|r")
         end
 
+        -- Theme selector
+        rootDescription:CreateDivider()
+        rootDescription:CreateTitle("Theme: |cffcc9900" .. (self.db.theme or "blizzard") .. "|r")
+        for _, t in ipairs({"blizzard", "dark", "minimal", "neon", "custom"}) do
+            local isCurrent = (self.db.theme or "blizzard") == t
+            local prefix = isCurrent and "|cffffff00● |r" or "    "
+            rootDescription:CreateButton(prefix .. t, function()
+                self.db.theme = t
+                self:ApplyVisualOverrides()
+                self:Print("Theme: |cffcc9900" .. t .. "|r")
+            end)
+        end
+
+        rootDescription:CreateDivider()
+
+        -- Customization submenu
+        rootDescription:CreateCheckbox(
+            "Show peek hint",
+            function() return self.db.showPeekHint ~= false end,
+            function() self.db.showPeekHint = not self.db.showPeekHint end
+        )
+        rootDescription:CreateCheckbox(
+            "Hide docked headers",
+            function() return self.db.hideDockedHeaders end,
+            function()
+                self.db.hideDockedHeaders = not self.db.hideDockedHeaders
+                self:ApplyVisualOverrides()
+            end
+        )
+
+        rootDescription:CreateDivider()
+
         -- Open full options
         rootDescription:CreateButton(
             "|TInterface\\BUTTONS\\UI-OptionsButton:14:14:0:0|t Options Panel",
@@ -1034,11 +1244,11 @@ function DMP:RegisterSlashCommands()
         elseif input == "snap" or input == "toggle" then
             self.db.enabled = not self.db.enabled
             self:Print("Snap/dock: " ..
-                (self.db.enabled and "|cff00ff00ON|r" or "|cffff4444OFF|r"))
+                (self.db.enabled and "|cff66cc33ON|r" or "|cffff4444OFF|r"))
         elseif input == "sync" then
             self.db.syncResize = not self.db.syncResize
             self:Print("Synced resize: " ..
-                (self.db.syncResize and "|cff00ff00ON|r" or "|cffff4444OFF|r"))
+                (self.db.syncResize and "|cff66cc33ON|r" or "|cffff4444OFF|r"))
         elseif input == "undock" or input == "reset" then
             self:UndockAll()
         elseif input == "find" then
@@ -1049,22 +1259,90 @@ function DMP:RegisterSlashCommands()
             end
         elseif input == "status" then
             self:PrintStatus()
+        elseif input:match("^theme") then
+            local themeName = input:match("^theme%s+(.+)")
+            if themeName and THEMES[themeName] then
+                self.db.theme = themeName
+                self:ApplyVisualOverrides()
+                self:Print("Theme set to: |cffcc9900" .. themeName .. "|r")
+            elseif themeName == "custom" then
+                self.db.theme = "custom"
+                self:Print("Theme: custom (edit colors via SavedVariables)")
+            else
+                self:Print("Themes: blizzard, dark, minimal, neon, custom")
+                self:Print("Current: |cffcc9900" .. (self.db.theme or "blizzard") .. "|r")
+            end
+        elseif input:match("^bar") then
+            local barArg = input:match("^bar%s+(.+)")
+            if barArg == "default" or barArg == "reset" then
+                self.db.barTexture = ""
+                self:Print("Bar texture: Blizzard default")
+            elseif barArg == "flat" then
+                self.db.barTexture = "Interface\\Buttons\\WHITE8X8"
+                self:ApplyVisualOverrides()
+                self:Print("Bar texture: Flat")
+            elseif barArg == "smooth" then
+                self.db.barTexture = "Interface\\TargetingFrame\\UI-StatusBar"
+                self:ApplyVisualOverrides()
+                self:Print("Bar texture: Smooth")
+            elseif barArg == "blizzard" then
+                self.db.barTexture = "Interface\\RaidFrame\\Raid-Bar-Hp-Fill"
+                self:ApplyVisualOverrides()
+                self:Print("Bar texture: Blizzard Raid")
+            elseif barArg then
+                self.db.barTexture = barArg
+                self:ApplyVisualOverrides()
+                self:Print("Bar texture: " .. barArg)
+            else
+                self:Print("Bar textures: default, flat, smooth, blizzard")
+                self:Print("  Or: /md bar Interface\\Path\\To\\Texture")
+                self:Print("Current: " .. (self.db.barTexture ~= "" and self.db.barTexture or "default"))
+            end
+        elseif input:match("^alpha") then
+            local val = tonumber(input:match("^alpha%s+(.+)"))
+            if val then
+                val = math.max(0, math.min(1, val))
+                self.db.backgroundAlpha = val
+                self:ApplyVisualOverrides()
+                self:Print("Background alpha: " .. string.format("%.2f", val) ..
+                    (val == 0 and " (disabled)" or ""))
+            else
+                self:Print("Usage: /md alpha 0.0-1.0 (0 = use Blizzard default)")
+            end
+        elseif input == "gap" or input:match("^gap") then
+            local val = tonumber(input:match("^gap%s+(.+)"))
+            if val then
+                self.db.dockGap = math.max(0, math.floor(val))
+                self:RepositionAll()
+                self:Print("Dock gap: " .. self.db.dockGap .. "px")
+            else
+                self:Print("Usage: /md gap 0-20 (pixels between docked windows)")
+                self:Print("Current: " .. (self.db.dockGap or 0) .. "px")
+            end
         else
-            self:Print("|cff00ccffMeterDock|r v" .. self.version)
-            self:Print("  /md          - Options panel")
-            self:Print("  /md snap     - Toggle dock")
-            self:Print("  /md sync     - Toggle sync resize")
-            self:Print("  /md undock   - Undock all")
-            self:Print("  /md find     - Re-scan windows")
-            self:Print("  /md status   - Status")
+            self:Print("|cffcc9900MeterDock|r v" .. self.version)
+            self:Print("  /md            - Options panel")
+            self:Print("  /md snap       - Toggle dock")
+            self:Print("  /md sync       - Toggle sync resize")
+            self:Print("  /md undock     - Undock all")
+            self:Print("  /md theme [x]  - Change theme")
+            self:Print("  /md bar [x]    - Change bar texture")
+            self:Print("  /md alpha [x]  - Background opacity")
+            self:Print("  /md gap [x]    - Gap between docked")
+            self:Print("  /md find       - Re-scan windows")
+            self:Print("  /md status     - Status")
         end
     end
 end
 
 function DMP:PrintStatus()
-    self:Print("|cff00ccff— Status —|r")
-    self:Print("  Enabled: " .. (self.db.enabled and "|cff00ff00YES|r" or "|cffff4444NO|r"))
-    self:Print("  Sync: " .. (self.db.syncResize ~= false and "|cff00ff00ON|r" or "|cffff4444OFF|r"))
+    self:Print("|cffcc9900— Status —|r")
+    self:Print("  Enabled: " .. (self.db.enabled and "|cff66cc33YES|r" or "|cffff4444NO|r"))
+    self:Print("  Sync: " .. (self.db.syncResize ~= false and "|cff66cc33ON|r" or "|cffff4444OFF|r"))
+    self:Print("  Theme: |cffcc9900" .. (self.db.theme or "blizzard") .. "|r")
+    self:Print("  Bar: " .. (self.db.barTexture ~= "" and self.db.barTexture or "default"))
+    self:Print("  BG alpha: " .. (self.db.backgroundAlpha or 0))
+    self:Print("  Gap: " .. (self.db.dockGap or 0) .. "px")
     self:Print("  Anchor: " .. (anchorWindow and "#1" or "none"))
     self:Print("  Secondary: " .. #secondaryWindows)
     local n = 0
@@ -1098,41 +1376,34 @@ function DMP:SetupPeekExpand(win)
     peekHandle:EnableMouse(true)
     peekHandle:Show()
 
-    -- Visual hint on hover (subtle top-edge highlight + animated arrow text)
-    local hintTex = peekHandle:CreateTexture(nil, "OVERLAY")
-    hintTex:SetAllPoints()
-    hintTex:SetColorTexture(0, 0.8, 1.0, 0)
-    peekHandle._hint = hintTex
+    -- No background bar - just show text + icons cleanly
 
-    -- Animated arrow indicator (modern resize-style icons + text)
+    -- Animated arrow indicator
     local arrowTexture = "Interface\\BUTTONS\\Arrow-Up-Up"
 
     -- Left arrow icon
     local arrowLeft = peekHandle:CreateTexture(nil, "OVERLAY")
-    arrowLeft:SetSize(16, 16)
-    arrowLeft:SetPoint("RIGHT", peekHandle, "CENTER", -46, 0)
+    arrowLeft:SetSize(12, 12)
+    arrowLeft:SetPoint("RIGHT", peekHandle, "CENTER", -42, 0)
     arrowLeft:SetTexture(arrowTexture)
-    arrowLeft:SetVertexColor(0.35, 0.8, 1.0)
     arrowLeft:SetAlpha(0)
     peekHandle._arrowLeft = arrowLeft
 
     -- Right arrow icon
     local arrowRight = peekHandle:CreateTexture(nil, "OVERLAY")
-    arrowRight:SetSize(16, 16)
-    arrowRight:SetPoint("LEFT", peekHandle, "CENTER", 46, 0)
+    arrowRight:SetSize(12, 12)
+    arrowRight:SetPoint("LEFT", peekHandle, "CENTER", 42, 0)
     arrowRight:SetTexture(arrowTexture)
-    arrowRight:SetVertexColor(0.35, 0.8, 1.0)
     arrowRight:SetAlpha(0)
     peekHandle._arrowRight = arrowRight
 
-    -- Text label (modern, lighter weight feel)
+    -- Text label
     local arrowLabel = peekHandle:CreateFontString(nil, "OVERLAY")
-    arrowLabel:SetFont(STANDARD_TEXT_FONT, 10, "OUTLINE")
+    arrowLabel:SetFont(STANDARD_TEXT_FONT, 9, "OUTLINE")
     arrowLabel:SetPoint("CENTER", peekHandle, "CENTER", 0, 0)
     arrowLabel:SetText("drag to expand")
-    arrowLabel:SetTextColor(0.55, 0.85, 1.0)
     arrowLabel:SetShadowOffset(1, -1)
-    arrowLabel:SetShadowColor(0, 0, 0, 0.6)
+    arrowLabel:SetShadowColor(0, 0, 0, 0.8)
     arrowLabel:SetAlpha(0)
     peekHandle._arrowLabel = arrowLabel
 
@@ -1141,7 +1412,11 @@ function DMP:SetupPeekExpand(win)
     local arrowShowing = false
 
     peekHandle:SetScript("OnEnter", function()
-        hintTex:SetColorTexture(0, 0.8, 1.0, 0.15)
+        if self.db.showPeekHint == false then return end
+        local c = self:GetColors()
+        arrowLeft:SetVertexColor(c.text[1], c.text[2], c.text[3])
+        arrowRight:SetVertexColor(c.text[1], c.text[2], c.text[3])
+        arrowLabel:SetTextColor(c.text[1], c.text[2], c.text[3])
         arrowShowing = true
         arrowBounce = 0
         arrowLabel:SetAlpha(0.85)
@@ -1150,7 +1425,6 @@ function DMP:SetupPeekExpand(win)
     end)
     peekHandle:SetScript("OnLeave", function()
         if not win._dmpPeeking then
-            hintTex:SetColorTexture(0, 0.8, 1.0, 0)
             arrowShowing = false
             arrowLabel:SetAlpha(0)
             arrowLeft:SetAlpha(0)
@@ -1215,25 +1489,21 @@ function DMP:SetupPeekExpand(win)
             win._dmpPeekOrigHeight = win:GetHeight()
             win._dmpPeekOrigWidth = win:GetWidth()
             win._dmpPeekAnchorsCleared = false
-            -- Save all original anchor points
             win._dmpPeekOrigPoints = {}
             for i = 1, win:GetNumPoints() do
                 win._dmpPeekOrigPoints[i] = { win:GetPoint(i) }
             end
             win._dmpPeekStartY = select(2, GetCursorPosition()) / UIParent:GetEffectiveScale()
-            hintTex:SetColorTexture(0, 0.8, 1.0, 0.25)
         end
     end)
 
     peekHandle:SetScript("OnMouseUp", function()
         if win._dmpPeeking then
             win._dmpPeeking = false
-            hintTex:SetColorTexture(0, 0.8, 1.0, 0)
             arrowShowing = false
             arrowLabel:SetAlpha(0)
             arrowLeft:SetAlpha(0)
             arrowRight:SetAlpha(0)
-            -- Animate back to original height then restore anchors
             self:AnimatePeekRestore(win, win._dmpPeekOrigHeight)
         end
     end)
@@ -1286,5 +1556,5 @@ end
 --------------------------------------------------------------------
 
 function DMP:Print(msg)
-    DEFAULT_CHAT_FRAME:AddMessage("|cff00ccff[MeterDock]|r " .. msg)
+    DEFAULT_CHAT_FRAME:AddMessage("|cffcc9900[MeterDock]|r " .. msg)
 end
